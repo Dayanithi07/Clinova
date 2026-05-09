@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Camera, Edit2, Shield, Heart, Activity, Save, X, User } from 'lucide-react';
+import { Camera, Edit2, Shield, Heart, Activity, Save, X, User, AlertCircle, UserCheck } from 'lucide-react';
 import { useAuth } from '../contexts/useAuth';
 import { supabase } from '../services/supabase';
 import { getProfile, updateProfile } from '../services/api';
@@ -18,58 +18,67 @@ const Profile = () => {
 
   useEffect(() => {
     if (!user) return;
-
     const fetchProfile = async () => {
       setLoading(true);
-      const { data } = await getProfile(user.id);
+      const { data, error } = await getProfile(user.id);
+      if (error) console.error('Profile fetch error:', error);
       if (data) {
         setProfile(data);
         setFormData(data);
       }
       setLoading(false);
     };
-
     fetchProfile();
 
-    const profileSub = supabase.channel('public:profiles')
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` }, payload => {
+    const profileSub = supabase.channel(`profile-${user.id}`)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'profiles',
+        filter: `id=eq.${user.id}`
+      }, payload => {
         setProfile(payload.new);
         if (!editing) setFormData(payload.new);
       }).subscribe();
 
-    return () => {
-      supabase.removeChannel(profileSub);
-    };
+    return () => { supabase.removeChannel(profileSub); };
   }, [user, editing]);
 
   const handleSave = async () => {
     if (!user) return;
     setSaving(true);
-    const { error } = await updateProfile(user.id, {
-      full_name: formData.full_name,
-      age: formData.age,
-      blood_group: formData.blood_group,
-      phone: formData.phone,
-      emergency_contact: formData.emergency_contact,
-      emergency_phone: formData.emergency_phone,
-      caretaker_name: formData.caretaker_name,
-      caretaker_phone: formData.caretaker_phone,
-      caretaker_relation: formData.caretaker_relation
-    });
+    
+    const updates = {
+      full_name: formData.full_name || null,
+      age: formData.age ? parseInt(formData.age) : null,
+      blood_group: formData.blood_group || null,
+      phone: formData.phone || null,
+      emergency_contact: formData.emergency_contact || null,
+      emergency_phone: formData.emergency_phone || null,
+      caretaker_name: formData.caretaker_name || null,
+      caretaker_phone: formData.caretaker_phone || null,
+      caretaker_relation: formData.caretaker_relation || null,
+    };
+
+    const { error } = await updateProfile(user.id, updates);
 
     if (error) {
-      toast.error('Failed to update profile');
+      console.error('Profile save error:', error);
+      toast.error('Failed to update profile: ' + (error.message || 'Unknown error'));
     } else {
+      setProfile((prev: any) => ({ ...prev, ...updates }));
       toast.success('Profile updated successfully');
       setEditing(false);
     }
     setSaving(false);
   };
 
+  const handleCancel = () => {
+    setEditing(false);
+    setFormData(profile);
+  };
+
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user) return;
-
     setAvatarUploading(true);
     const filePath = `${user.id}/${Date.now()}-${file.name}`;
     const { error: uploadError } = await supabase.storage
@@ -77,7 +86,7 @@ const Profile = () => {
       .upload(filePath, file, { upsert: true, contentType: file.type });
 
     if (uploadError) {
-      toast.error(uploadError.message || 'Failed to upload profile photo');
+      toast.error(uploadError.message || 'Failed to upload photo');
       setAvatarUploading(false);
       return;
     }
@@ -87,238 +96,213 @@ const Profile = () => {
     if (publicUrl) {
       const { error } = await updateProfile(user.id, { avatar_url: publicUrl });
       if (error) {
-        toast.error(error.message || 'Failed to update profile photo');
+        toast.error('Failed to update profile photo');
       } else {
         setProfile((prev: any) => ({ ...prev, avatar_url: publicUrl }));
         setFormData((prev: any) => ({ ...prev, avatar_url: publicUrl }));
         toast.success('Profile photo updated');
       }
     }
-
     setAvatarUploading(false);
   };
 
-  const containerVariants = {
-    hidden: { opacity: 0 },
-    visible: { opacity: 1, transition: { staggerChildren: 0.1 } },
-  };
+  const Field = ({ label, value, field, type = 'text', icon: Icon }: any) => (
+    <div className="space-y-1">
+      <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+        {Icon && <Icon size={12} />}
+        {label}
+      </label>
+      {editing && field !== 'email' ? (
+        type === 'select' ? (
+          <select
+            value={formData?.[field] || ''}
+            onChange={e => setFormData({ ...formData, [field]: e.target.value })}
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-800 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+          >
+            <option value="">Select</option>
+            {['A+','A-','B+','B-','AB+','AB-','O+','O-'].map(g => (
+              <option key={g} value={g}>{g}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type={type}
+            value={formData?.[field] || ''}
+            onChange={e => setFormData({ ...formData, [field]: e.target.value })}
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-800 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+          />
+        )
+      ) : (
+        <p className="text-sm font-medium text-slate-800 py-1">
+          {value || <span className="text-slate-400 font-normal">Not set</span>}
+        </p>
+      )}
+    </div>
+  );
 
-  const itemVariants = {
-    hidden: { y: 20, opacity: 0 },
-    visible: { y: 0, opacity: 1 },
-  };
+  const SectionCard = ({ title, icon: Icon, color = 'blue', children }: any) => (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className={`px-6 py-4 border-b border-slate-100 flex items-center gap-2.5`}>
+        <div className={`w-8 h-8 rounded-lg bg-${color}-50 flex items-center justify-center`}>
+          <Icon size={16} className={`text-${color}-600`} />
+        </div>
+        <h3 className="font-semibold text-slate-800">{title}</h3>
+      </div>
+      <div className="p-6">{children}</div>
+    </div>
+  );
 
   if (loading) {
     return (
-      <div className="space-y-6 max-w-4xl mx-auto animate-pulse">
-        <div className="h-64 bg-gray-200 rounded-2xl w-full"></div>
+      <div className="max-w-4xl mx-auto space-y-6 animate-pulse">
+        <div className="h-32 bg-slate-200 rounded-2xl" />
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="h-48 bg-gray-200 rounded-2xl md:col-span-2"></div>
-          <div className="h-48 bg-gray-200 rounded-2xl md:col-span-1"></div>
+          <div className="md:col-span-2 h-64 bg-slate-200 rounded-2xl" />
+          <div className="h-64 bg-slate-200 rounded-2xl" />
         </div>
       </div>
     );
   }
 
+  const displayName = profile?.full_name || user?.user_metadata?.full_name || 'Patient';
+  const displayEmail = profile?.email || user?.email || '';
+
   return (
-    <motion.div variants={containerVariants} initial="hidden" animate="visible" className="space-y-6 max-w-4xl mx-auto">
-      {/* Profile Header */}
-      <motion.div variants={itemVariants} className="bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100">
-        <div className="h-32 bg-gradient-to-r from-primary-blue to-primary-cyan relative">
-        </div>
-        <div className="px-8 pb-8 relative">
-          <div className="absolute -top-16 left-8">
-            <div className="relative">
-              <div className="w-32 h-32 rounded-full border-4 border-white bg-primary-light flex items-center justify-center overflow-hidden">
-                {profile?.avatar_url ? (
-                  <img
-                    src={profile.avatar_url}
-                    alt="Profile"
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <User size={40} className="text-primary-blue" />
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => avatarInputRef.current?.click()}
-                className="absolute bottom-0 right-0 bg-primary-blue text-white p-2 rounded-full border-2 border-white hover:bg-blue-700 transition-colors"
-              >
-                <Camera size={16} />
-              </button>
-              <input
-                ref={avatarInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleAvatarChange}
-              />
-              {avatarUploading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-white/70 rounded-full">
-                  <span className="text-xs text-text-secondary">Uploading...</span>
-                </div>
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="max-w-4xl mx-auto space-y-6"
+    >
+      {/* Clean Profile Header - no overlapping elements */}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-5">
+          {/* Avatar */}
+          <div className="relative flex-shrink-0">
+            <div className="w-24 h-24 rounded-full border-4 border-slate-200 bg-slate-100 flex items-center justify-center overflow-hidden">
+              {profile?.avatar_url ? (
+                <img src={profile.avatar_url} alt={displayName} className="w-full h-full object-cover" />
+              ) : (
+                <User size={32} className="text-slate-400" />
               )}
             </div>
-          </div>
-          <div className="mt-20 flex justify-between items-end">
-            <div>
-              <h1 className="text-2xl font-bold text-text-primary">{profile?.full_name || 'Patient'}</h1>
-              <p className="text-text-secondary">Patient ID: #CL-{user?.id.substring(0,6)}</p>
-            </div>
-            <button className="btn-secondary flex items-center gap-2">
-              <Shield size={16} /> Privacy
+            <button
+              onClick={() => avatarInputRef.current?.click()}
+              disabled={avatarUploading}
+              className="absolute bottom-0 right-0 bg-blue-600 text-white p-2 rounded-full border-2 border-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              <Camera size={14} />
             </button>
+            <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
+          </div>
+
+          {/* User Info */}
+          <div className="flex-1 min-w-0">
+            <h1 className="text-2xl font-bold text-slate-900">{displayName}</h1>
+            <p className="text-slate-500 text-sm">{displayEmail}</p>
+          </div>
+
+          {/* Edit + Privacy */}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {!editing ? (
+              <>
+                <button
+                  onClick={() => setEditing(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors text-sm"
+                >
+                  <Edit2 size={14} /> Edit Profile
+                </button>
+                <button className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-medium hover:bg-slate-200 transition-colors text-sm">
+                  <Shield size={14} /> Privacy
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={handleCancel}
+                  className="px-4 py-2 text-slate-600 hover:text-slate-900 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-xl font-medium hover:bg-green-700 disabled:opacity-50 transition-colors text-sm"
+                >
+                  <Save size={14} /> {saving ? 'Saving...' : 'Save'}
+                </button>
+              </>
+            )}
           </div>
         </div>
-      </motion.div>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Personal Info */}
-        <motion.div variants={itemVariants} className="md:col-span-2 space-y-6">
-          <div className="card-container p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-lg font-bold text-text-primary">Personal Information</h3>
-              {!editing ? (
-                <button onClick={() => setEditing(true)} className="text-primary-blue hover:underline text-sm font-medium flex items-center gap-1">
-                  <Edit2 size={14} /> Edit
-                </button>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <button onClick={() => { setEditing(false); setFormData(profile); }} className="text-gray-500 hover:text-gray-700">
-                    <X size={20} />
-                  </button>
-                  <button onClick={handleSave} disabled={saving} className="btn-primary py-1 px-3 flex items-center gap-1 text-sm">
-                    <Save size={14} /> {saving ? 'Saving...' : 'Save'}
-                  </button>
-                </div>
-              )}
+        {/* Left: Main Info */}
+        <div className="md:col-span-2 space-y-5">
+          <SectionCard title="Personal Information" icon={User} color="blue">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="Full Name" value={profile?.full_name} field="full_name" />
+              <Field label="Email Address" value={profile?.email} field="email" />
+              <Field label="Phone Number" value={profile?.phone} field="phone" />
+              <Field label="Age" value={profile?.age} field="age" type="number" />
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              <div>
-                <label className="text-xs text-text-secondary font-medium">Full Name</label>
-                {editing ? (
-                  <input type="text" value={formData?.full_name || ''} onChange={e => setFormData({...formData, full_name: e.target.value})} className="input-field mt-1 py-1" />
-                ) : (
-                  <p className="text-text-primary font-medium mt-1 border-b border-gray-100 pb-2">{profile?.full_name || 'Not set'}</p>
-                )}
-              </div>
-              <div>
-                <label className="text-xs text-text-secondary font-medium">Email Address</label>
-                <p className="text-text-primary font-medium mt-1 border-b border-gray-100 pb-2">{profile?.email || user?.email}</p>
-              </div>
-              <div>
-                <label className="text-xs text-text-secondary font-medium">Phone Number</label>
-                {editing ? (
-                  <input type="text" value={formData?.phone || ''} onChange={e => setFormData({...formData, phone: e.target.value})} className="input-field mt-1 py-1" />
-                ) : (
-                  <p className="text-text-primary font-medium mt-1 border-b border-gray-100 pb-2">{profile?.phone || 'Not set'}</p>
-                )}
-              </div>
-              <div>
-                <label className="text-xs text-text-secondary font-medium">Age</label>
-                {editing ? (
-                  <input type="number" value={formData?.age || ''} onChange={e => setFormData({...formData, age: parseInt(e.target.value)})} className="input-field mt-1 py-1" />
-                ) : (
-                  <p className="text-text-primary font-medium mt-1 border-b border-gray-100 pb-2">{profile?.age || 'Not set'}</p>
-                )}
-              </div>
-            </div>
-          </div>
+          </SectionCard>
 
-          <div className="card-container p-6">
-            <h3 className="text-lg font-bold text-text-primary mb-6">Emergency Contact</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              <div>
-                <label className="text-xs text-text-secondary font-medium">Contact Name</label>
-                {editing ? (
-                  <input type="text" value={formData?.emergency_contact || ''} onChange={e => setFormData({...formData, emergency_contact: e.target.value})} className="input-field mt-1 py-1" />
-                ) : (
-                  <p className="text-text-primary font-medium mt-1">{profile?.emergency_contact || 'Not set'}</p>
-                )}
-              </div>
-              <div>
-                <label className="text-xs text-text-secondary font-medium">Phone Number</label>
-                {editing ? (
-                  <input type="text" value={formData?.emergency_phone || ''} onChange={e => setFormData({...formData, emergency_phone: e.target.value})} className="input-field mt-1 py-1" />
-                ) : (
-                  <p className="text-text-primary font-medium mt-1">{profile?.emergency_phone || 'Not set'}</p>
-                )}
-              </div>
+          <SectionCard title="Emergency Contact" icon={AlertCircle} color="orange">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="Contact Name" value={profile?.emergency_contact} field="emergency_contact" />
+              <Field label="Phone Number" value={profile?.emergency_phone} field="emergency_phone" />
             </div>
-          </div>
+          </SectionCard>
 
-          <div className="card-container p-6">
-            <h3 className="text-lg font-bold text-text-primary mb-6">Caretaker Details</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              <div>
-                <label className="text-xs text-text-secondary font-medium">Caretaker Name</label>
-                {editing ? (
-                  <input type="text" value={formData?.caretaker_name || ''} onChange={e => setFormData({...formData, caretaker_name: e.target.value})} className="input-field mt-1 py-1" />
-                ) : (
-                  <p className="text-text-primary font-medium mt-1">{profile?.caretaker_name || 'Not set'}</p>
-                )}
-              </div>
-              <div>
-                <label className="text-xs text-text-secondary font-medium">Caretaker Phone</label>
-                {editing ? (
-                  <input type="text" value={formData?.caretaker_phone || ''} onChange={e => setFormData({...formData, caretaker_phone: e.target.value})} className="input-field mt-1 py-1" />
-                ) : (
-                  <p className="text-text-primary font-medium mt-1">{profile?.caretaker_phone || 'Not set'}</p>
-                )}
-              </div>
-              <div>
-                <label className="text-xs text-text-secondary font-medium">Relationship</label>
-                {editing ? (
-                  <input type="text" value={formData?.caretaker_relation || ''} onChange={e => setFormData({...formData, caretaker_relation: e.target.value})} className="input-field mt-1 py-1" />
-                ) : (
-                  <p className="text-text-primary font-medium mt-1">{profile?.caretaker_relation || 'Not set'}</p>
-                )}
-              </div>
+          <SectionCard title="Caretaker Details" icon={UserCheck} color="purple">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="Caretaker Name" value={profile?.caretaker_name} field="caretaker_name" />
+              <Field label="Caretaker Phone" value={profile?.caretaker_phone} field="caretaker_phone" />
+              <Field label="Relationship" value={profile?.caretaker_relation} field="caretaker_relation" />
             </div>
-          </div>
-        </motion.div>
+          </SectionCard>
+        </div>
 
-        {/* Medical Summary */}
-        <motion.div variants={itemVariants} className="md:col-span-1 space-y-6">
-          <div className="card-container p-6">
-            <h3 className="text-lg font-bold text-text-primary mb-6">Medical Summary</h3>
+        {/* Right: Medical Summary */}
+        <div className="space-y-5">
+          <SectionCard title="Medical Summary" icon={Heart} color="red">
             <div className="space-y-4">
-              <div className="flex items-center gap-3 p-3 bg-red-50 rounded-xl">
-                <Heart size={20} className="text-red-500" />
-                <div className="flex-1">
-                  <p className="text-xs text-red-500 font-semibold">Blood Group</p>
-                  {editing ? (
-                    <select value={formData?.blood_group || ''} onChange={e => setFormData({...formData, blood_group: e.target.value})} className="input-field mt-1 py-1 bg-white">
-                      <option value="">Select</option>
-                      <option value="A+">A+</option><option value="A-">A-</option>
-                      <option value="B+">B+</option><option value="B-">B-</option>
-                      <option value="AB+">AB+</option><option value="AB-">AB-</option>
-                      <option value="O+">O+</option><option value="O-">O-</option>
-                    </select>
-                  ) : (
-                    <p className="text-lg font-bold text-red-700">{profile?.blood_group || '-'}</p>
-                  )}
-                </div>
+              <div className="p-3 bg-red-50 rounded-xl">
+                <p className="text-xs text-red-600 font-semibold mb-1">Blood Group</p>
+                {editing ? (
+                  <select
+                    value={formData?.blood_group || ''}
+                    onChange={e => setFormData({ ...formData, blood_group: e.target.value })}
+                    className="w-full rounded-lg border border-red-200 bg-white px-3 py-1.5 text-sm text-slate-800"
+                  >
+                    <option value="">Select</option>
+                    {['A+','A-','B+','B-','AB+','AB-','O+','O-'].map(g => (
+                      <option key={g} value={g}>{g}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="text-lg font-bold text-red-700">{profile?.blood_group || '-'}</p>
+                )}
               </div>
-              <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-xl">
-                <Activity size={20} className="text-blue-500" />
-                <div>
-                  <p className="text-xs text-blue-500 font-semibold">Status</p>
-                  <p className="text-lg font-bold text-blue-700">Active</p>
-                </div>
-              </div>
-            </div>
 
-            <div className="mt-6">
-              <h4 className="text-sm font-bold text-text-primary mb-3">Health Status</h4>
-              <p className="text-xs text-text-secondary">Connected to Supabase Realtime</p>
+              <div className="p-3 bg-blue-50 rounded-xl">
+                <p className="text-xs text-blue-600 font-semibold mb-1">Status</p>
+                <p className="text-sm font-bold text-blue-700">Active</p>
+              </div>
+
+              <div>
+                <p className="text-xs text-slate-500 font-semibold mb-1">Health Status</p>
+                <p className="text-sm text-slate-600">Connected to Supabase Realtime</p>
+              </div>
             </div>
-          </div>
-        </motion.div>
+          </SectionCard>
+        </div>
       </div>
     </motion.div>
   );
 };
 
 export default Profile;
+

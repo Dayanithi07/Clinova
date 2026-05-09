@@ -1,7 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
-const geminiModel = import.meta.env.VITE_GEMINI_MODEL || 'gemini-1.5-flash-latest';
+const geminiModel = import.meta.env.VITE_GEMINI_MODEL || 'gemini-2.0-flash';
 const aiEnabled = import.meta.env.VITE_AI_ENABLED !== 'false';
 
 export const AI_DISCLAIMER =
@@ -18,8 +18,16 @@ export const SYSTEM_PROMPT = [
 
 let geminiClient;
 
+// Updated model list with current working models (2024-2025)
 const MODEL_FALLBACKS = Array.from(
-  new Set([geminiModel, 'gemini-1.5-flash-latest', 'gemini-1.5-pro', 'gemini-pro'])
+  new Set([
+    geminiModel,
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-8b',
+    'gemini-1.5-pro',
+  ])
 );
 
 export const isAiEnabled = () => aiEnabled && Boolean(geminiApiKey);
@@ -67,7 +75,7 @@ export const generateGeminiContent = async ({ systemPrompt, userPrompt, temperat
 
   const isModelNotFound = (error) => {
     const message = error?.message || '';
-    return error?.status === 404 || /not found|404/i.test(message);
+    return error?.status === 404 || /not found|404|not supported/i.test(message);
   };
 
   let lastError;
